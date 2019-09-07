@@ -32,6 +32,8 @@ class PfSocketSrv( val mSocket : Socket ) : PfSocket()
     // mHThreadでの受信待ちの1byteのバッファ
     val mReceived1stByte = ByteArray(1)
 
+    var mReceived1st = false
+
     // 受信待ちのスレッド処理
     val threadProc = object : Runnable {
 
@@ -48,14 +50,21 @@ class PfSocketSrv( val mSocket : Socket ) : PfSocket()
                     // サイズ0では待てないので、1byte待ちをする。
                     var nread = 0
 
-                    mIStream?.run {
-                        nread = read(mReceived1stByte, 0, mReceived1stByte.size)
+                    if( mReceived1st == false ) {
+
+                        mIStream?.run {
+                            nread = read(mReceived1stByte, 0, mReceived1stByte.size)
+                        }
+
+                        if( nread > 0 ) {
+                            mReceived1st = true
+                        }
                     }
 
                     when
                     {
                         // データがあればリスナーを呼び出す
-                        nread > 0 -> {
+                        nread > 0 || mReceived1st -> {
                             // onReceived リスナーを呼び出す
                             mListener.onReceived?.invoke( this@PfSocketSrv as PfSocket )
                         }
@@ -78,6 +87,8 @@ class PfSocketSrv( val mSocket : Socket ) : PfSocket()
                 mIStream?.close()
 
                 mIStream = null
+
+                mReceived1st = false
             }
 
             // 切断されたらその旨をリスナーに通知し終了
@@ -174,27 +185,33 @@ class PfSocketSrv( val mSocket : Socket ) : PfSocket()
                 }
             }
 
-            // 1byte分はすでにスレッド側でリードしたうえで、
-            // mListener.OnReceived経由でここに至るはず
-            data[0] = mReceived1stByte[0]
-
             var n_read : Int = 0
 
-            when( len )
-            {
-                0 -> {
-                    mIStream?.run { n_read = read( data, 1, data.size-1 ) }
-                }
+            var n_to_read : Int = data.size
 
-                else -> {
-
-                    if( len > 1 ) {
-                        mIStream?.run { n_read = read(data, 1, len - 1) }
-                    }
-                }
+            if( len > 0 ) {
+                n_to_read = len
             }
 
-            return n_read+1
+            if( n_to_read > data.size ) {
+                n_to_read = data.size
+            }
+
+            var o_to_read = 0
+
+            if( mReceived1st ) {
+
+                mReceived1st = false
+                data[0] = mReceived1stByte[0]
+                --n_to_read
+                ++o_to_read
+            }
+
+            if( n_to_read > 0 ) {
+                mIStream?.run { n_read = read( data, o_to_read, n_to_read ) }
+            }
+
+            return n_read + o_to_read
 
         } catch( e : Exception ){
 
